@@ -4,7 +4,10 @@
 首先先安裝python <br/>
 接者在終端機輸入
 ``
-pip install numpy
+pip install numpy 
+``
+<br\>
+``
 pip install json
 ``
 ## 運行方式
