@@ -1,3 +1,6 @@
+'''
+負責連線
+'''
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -8,7 +11,7 @@ import numpy as np
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-N=3
+N=4
 def send_and_recieve_json(socket,msg):
     send_json(socket,msg)
     return wait_json(socket)
@@ -22,7 +25,7 @@ def wait_json(socket):
     data = json.loads(data)
     return data
 class SocketServer:
-    def __init__(self, host='0.0.0.0', port=9999, max_threads=5):
+    def __init__(self, host='0.0.0.0', port=9999, max_threads=10):
         self.host = host
         self.port = port
         self.max_threads = max_threads
@@ -32,8 +35,6 @@ class SocketServer:
         self.server_socket.listen(max_threads)
         self.thread_pool = ThreadPoolExecutor(max_workers=self.max_threads)
         logger.info(f"Server started on {self.host}:{self.port}")
-
-
         # p2p
         self.globalCond = threading.Condition()
         self.globalLock = threading.Lock()
@@ -63,6 +64,7 @@ class SocketServer:
                 self.index+=1
             logger.info(f"New connection from {client_address}")
             if self.waitclientnum>=N:#湊到一桌
+
                 for idx, otherclient in self.waitclients.items():
                     with otherclient['cond_ready']:
                         otherclient['cond_ready'].notify_all()
@@ -70,6 +72,7 @@ class SocketServer:
                 client['status']=2
                 with client['cond_ready']:
                     client['cond_ready'].wait()
+            logger.info(f'{client_address} wake')
             #有N個client連線
             msg={#告訴每個client需要建立多少listen和connect socket
                 "status": 200,
@@ -109,6 +112,8 @@ class SocketServer:
             msg['msg']='success'
             msg['connectSockets']=client['connectSockets']
             send_json(client['socket'],msg)
+            self.waitclientnum-=1
+            self.index-=1
         except Exception as e:
             logger.error(f"Error handling client {client_address}: {e}")
         finally:

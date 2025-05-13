@@ -1,8 +1,8 @@
 #rock=0,paper=5,scissor=2
-class Rps:#scissor paper stone
-    def __init__(self, inputQueue, outputQueue):
-        self.inputQueue = inputQueue
-        self.outputQueue = outputQueue
+import client
+class Rps(client.p2pInterface):#scissor paper stone
+    def __init__(self):
+        super().__init__()
     def winner(self,ways):
         hasRock=0
         hasPaper=0
@@ -17,25 +17,27 @@ class Rps:#scissor paper stone
                 hasPaper=1
             else:
                 hasScissor=1
-        if hasRock and hasPaper and not hasScissor:
+        if      hasRock and     hasPaper and not hasScissor:
             return 1 if ways[0]==5 else -1
-        if not hasRock and hasPaper and hasScissor:
+        if  not hasRock and     hasPaper and     hasScissor:
             return 1 if ways[0]==2 else -1
-        if hasRock and not hasPaper and hasScissor:
+        if      hasRock and not hasPaper and     hasScissor:
             return 1 if ways[0]==0 else -1
         return 0
     def run(self):
         while True:
             way=int(input('輸入0 or 2 or 5:'))
-            self.sendMsg(f'-1:-1:{way}')
+            message={
+                'index':0,
+                'way':way
+            }
+            self.sendMsg(message)
             m1=self.recvMsg()
-            m1=m1.split(':')
-            id1=int(m1[0])
-            way1=int(m1[1])
+            id1=int(m1['index'])
+            way1=int(m1['way'])
             m2=self.recvMsg()
-            m2=m2.split(':')
-            id2=int(m2[0])
-            way2=int(m2[1])
+            id2=int(m2['index'])
+            way2=int(m2['way'])
             print(f'玩家 {id1} 出了 {way1}')
             print(f'玩家 {id2} 出了 {way2}')
             print(f'你出了 {way}')
@@ -47,14 +49,9 @@ class Rps:#scissor paper stone
                     print('獲勝')
                 case -1:
                     print('失敗')
-    def sendMsg(self, msg):
-        print(f'rps send [{msg}]')
-        self.inputQueue.put(msg)
-        return
-    def recvMsg(self):
-        return self.outputQueue.get()
-import client
+
+
 if __name__=='__main__':
-    inputQueue, outputQueue = client.p2pRun()
-    rps = Rps(inputQueue, outputQueue)
+    #inputQueue, outputQueue = client.p2pRun() #建立p2p連線，inputQueue 和 outputQueue 分別為p2p request和response
+    rps = Rps()
     rps.run()
