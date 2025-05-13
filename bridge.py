@@ -157,7 +157,13 @@ class Bridge(client.p2pInterface):
                     str += f'{RankName[j]}'
             print(str)
     
-    def display(self, isDisplayCards=0, isDisplayBid=0, isDisplayDeal=0, cards:list[int]=[], bidList:list[int]=[]):
+    def displayDeal(self, deal:dict):
+        print(f'{deal['dealName']}')
+        print(f'roundNum: {deal['roundNum']}')
+        print(f'declarerTrick: {deal['declarerTrick']}')
+        print(f'defenderTrick: {deal['defenderTrick']}')
+
+    def display(self, isDisplayCards=0, isDisplayBid=0, isDisplayDeal=0, cards:list[int]=[], bidList:list[int]=[], deal:dict={}):
         def clear_terminal():
             # 判斷作業系統
             if platform.system() == "Windows":
@@ -169,6 +175,8 @@ class Bridge(client.p2pInterface):
             self.displayCards(cards)
         if isDisplayBid:
             self.displayBid(bidList)
+        if isDisplayDeal:
+            self.displayDeal(deal)
 
     def decidePosition(self):#決定自己坐下的位置
         index = self.getIndex()
@@ -216,7 +224,6 @@ class Bridge(client.p2pInterface):
             self.cards = sorted(cards)
     
     def bid(self):
-        
         
         def isValidBid(bid:int, bidList:list[int]):
             def findLastBid(bidList:list[int]):
@@ -269,7 +276,6 @@ class Bridge(client.p2pInterface):
             i = 0
             declarer = -1
             for bid in bidList:
-                print(i, bid, finalBid, dealer)
                 if  i == finalPos or i == (finalPos+2)%4:
                     if bid < 35 and bid%5 == finalBid%5:
                         declarer = (i+dealer)%4
@@ -407,11 +413,14 @@ class Bridge(client.p2pInterface):
                 return
             for self.roundNum in range(13):
                 playOneRound()
-                print(f'winner: {self.leadPos}')
         def playOneRound():
-            print(f'第{self.roundNum+1}輪')
-            print(f'吃到的敦數: {self.trick}')
-            self.display(isDisplayCards=1, cards=self.cards)
+            self.display(isDisplayCards=1, cards=self.cards, isDisplayDeal=1, 
+                deal={
+                    'roundNum': self.roundNum,
+                    'declarerTrick': self.declarerTrick,
+                    'defenderTrick': self.defenderTrick,
+                    'dealName': self.dealName
+            })
             if self.leadPos == self.Pos:
                 oneRoundCards = []
                 playOneCard(oneRoundCards)
