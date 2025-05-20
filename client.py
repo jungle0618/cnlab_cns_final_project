@@ -15,7 +15,6 @@ bridge --- p2pInterface --- socketPool --- worker
 import socket
 import threading
 import queue
-import time
 from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
@@ -33,7 +32,7 @@ def send_json(socket, msg):
     msg_json = json.dumps(msg)
     socket.sendall(msg_json.encode('utf-8'))
 
-def wait_json(socket, size=1024):
+def wait_json(socket, size=1024*64):
     data = socket.recv(size)
     data = data.decode('utf-8')
     logger.debug(f'recv {data}')
@@ -172,7 +171,7 @@ class worker:  # 每個worker只能處理一個socket
         }))
         while True:
             try:
-                msg = self.socket.recv(1024)
+                msg = self.socket.recv(1024*64)
                 if msg == b'':
                     print('p2p error')
                     return
@@ -221,7 +220,7 @@ class worker:  # 每個worker只能處理一個socket
         try: 
             self.peer_socket, self.peer_address = self.socket.accept()
             self.peer_socket.sendall(b'hello')
-            self.peer_socket.recv(1024)
+            self.peer_socket.recv(1024*64)
             logger.debug(f'listen to {peerIndex}')
         except Exception as e:
             print(f"Error: {e}")
@@ -237,7 +236,7 @@ class worker:  # 每個worker只能處理一個socket
         }))
         while True:
             try:
-                msg = self.peer_socket.recv(1024)
+                msg = self.peer_socket.recv(1024*64)
                 if msg == b'':
                     print('p2p error')
                     return
@@ -389,46 +388,117 @@ class SocketPool:
             self.workers[0].msgQueue.put(json.dumps(worker_msg))
         elif command == "recv":
             message = msg["message"]
-            self.mainQueue.put(message)
+            self.mainQueue.put(json.loads(message))
         elif command == "exit":
             print('exit')
         else:
+            print(msg)
             print('msg error')
 
+from signature import DigitalSignature
+
 class p2pInterface():
-    def __init__(self):
+    def __init__(self, isSignature = False):
+        self.alreadyExchangePubKey = False
+        self.isSignature = isSignature
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
         socketPool = SocketPool(maxThreads=10)
         self.inputQueue, self.outputQueue = socketPool.p2pStart()
         self.index = socketPool.workers[1].index
-        print(f'index={self.index}')
+        #數位簽章
+        if self.isSignature:
+            self.signatureInit()
         return
-
+    
     def sendMsg(self, message, peerIndex = -1):
         # Input data is already in JSON format (dict)
-        msg = {
-            "from": -1,
-            "data": {
-                "command": "send",
-                "peerIndex": peerIndex,  # Default to broadcast, can be changed by caller
-                "message": message
+        if 'type' not in message:
+            print('Error: message must contain type')
+            return
+        if self.isSignature and self.alreadyExchangePubKey:#有簽章的話message需要再包一層
+            msg = {
+                "from": -1,
+                "data": {
+                    "command": "send",
+                    "peerIndex": peerIndex,  # Default to broadcast, can be changed by caller
+                    "message": self.wrapWithSignature(message)
+                }
             }
-        }
-        self.inputQueue.put(json.dumps(msg))
-        return
+            self.inputQueue.put(json.dumps(msg))
+        else:
+            msg = {
+                "from": -1,
+                "data": {
+                    "command": "send",
+                    "peerIndex": peerIndex,  # Default to broadcast, can be changed by caller
+                    "message": message
+                }
+            }
+            self.inputQueue.put(json.dumps(msg))
 
-    def recvMsg(self):
-        # Output queue now contains JSON strings
-        data = self.outputQueue.get()
-        #print(f'recv {data}')
-        try:
-            return json.loads(data)
-        except json.JSONDecodeError:
-            print("Error decoding JSON message")
-            return None
+    def recvMsg(self, type=''):#若type不為空，則只接收type的訊息
+        if type != '':
+            temp = []
+            while True:
+                data = self.outputQueue.get()
+                '''
+                有簽章的訊息
+                data = {
+                'index':
+                'message':'message'<-要回傳的
+                'signature'
+                }
+                '''
+                if self.isSignature and self.alreadyExchangePubKey:
+                    message = data['message']
+                else:
+                    message = data
+                if message['type'] == type:
+                    break
+                else:
+                    temp.append(data)
+            for temp_data in temp:
+                self.outputQueue.put(temp_data)
+        else:
+            data = self.outputQueue.get()
         
+        if self.isSignature and self.alreadyExchangePubKey:
+            sig:str = data['signature']
+            message_json = json.dumps(data['message'], sort_keys=True)
+            b64PubKey = self.PubKeyList[int(data['index'])]
+            ok = self.digitalSignature.verify(sig, b64PubKey, message_json)
+            if not ok:
+                input('error signature')
+            return data['message']
+        else:
+            return data
+    
     def getIndex(self):
         return self.index
+    
+    def signatureInit(self):
+        self.alreadyExchangePubKey = 0
+        self.digitalSignature = DigitalSignature()
+        self.PubKeyList = ['']*4
+        self.PubKey = self.digitalSignature.getPubKey()
+        msg = {
+            'type': 'signature public key',
+            'index': self.index,
+            'public key': self.PubKey
+        }
+        self.sendMsg(msg, peerIndex=-1)
+        for _ in range(4-1):
+            msg = self.recvMsg(type='signature public key')
+            index = int(msg['index'])
+            self.PubKeyList[index] = msg['public key']
+        self.alreadyExchangePubKey = 1
+
+    def wrapWithSignature(self, message: dict) -> dict:
+        return {
+            'index': self.index,
+            'message': message,
+            'signature': self.digitalSignature.signature(json.dumps(message, sort_keys=True))
+        }
 
 if __name__=='__main__':
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')

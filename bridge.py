@@ -1,5 +1,6 @@
 import random
 import client
+from protocol import Protocol
 SuitName = ['C', 'D', 'H', 'S']
 SuitNum = {
     'C': 0, 'D': 1, 'H': 2, 'S': 3
@@ -69,26 +70,31 @@ import platform
 
 
 class Bridge(client.p2pInterface):
-    index: int
-    nextIndex: int
-    boradId: int
-    dealer: int
-    vul: int
-    cards: list[int]
-    level: int
-    trump: int
-    declarer: int
-    double: int
-    dealName: str
-    score: int
-    roundNum: int
-    leadPos: int
-    dummy:int
-    declarerTrick: int
-    defenderTrick: int
-    def __init__(self):
+    boradId: int#牌號
+    dealer: int#開叫人
+    vul: int#身價 0:none, 1:ns, 2:ew, 3:both
+    cards: list[int]#手上的13張牌
+    level: int#叫牌線位
+    trump: int#王牌
+    declarerPos: int#主打方位
+    double: int#合約是否賭倍:0:none, 1:x, 2:xx
+    dealName: str#合約名稱: 1CW or 2NW or 7NEXX or AP ...
+    score: int#每回合分數，以南北加為基準
+    roundNum: int#打牌到第幾輪，0<=roundNum<13
+    leadPos: int#每輪第一個出牌的人
+    dummyPos:int#夢家方位
+    declarerTrick: int#主打方吃的敦數
+    defenderTrick: int#防禦方吃的敦數
+    playPos: int#換哪個玩家行動
+    oneRoundCards: list[int]#每輪打出的牌
+    trick: int
+    def __init__(self, p2pInterface: client.p2pInterface, encryption = 0):
         #建立p2p連線
-        super().__init__()
+        self.p2pInterface: client.p2pInterface = p2pInterface
+        self.decidePosition()
+        self.encryption = encryption
+        if encryption:
+            self.procotocol = Protocol(Pos=self.Pos, nPlayer=4, nCards=52)
 
     def boradInit(self, boardId):#算出牌號，開叫和身價
         def findDealerandVul(boardId):     
@@ -162,9 +168,15 @@ class Bridge(client.p2pInterface):
         print(f'roundNum: {deal['roundNum']}')
         print(f'declarerTrick: {deal['declarerTrick']}')
         print(f'defenderTrick: {deal['defenderTrick']}')
+        oneRoundCards:list[int] = deal['oneRoundCards']
+        str = ''
+        for card in oneRoundCards:
+            str+=self.toCardName(card)+' '
+        print(str)
 
     def display(self, isDisplayCards=0, isDisplayBid=0, isDisplayDeal=0, cards:list[int]=[], bidList:list[int]=[], deal:dict={}):
         def clear_terminal():
+            
             # 判斷作業系統
             if platform.system() == "Windows":
                 os.system('cls')  # Windows 系統清除
@@ -179,47 +191,47 @@ class Bridge(client.p2pInterface):
             self.displayDeal(deal)
 
     def decidePosition(self):#決定自己坐下的位置
-        index = self.getIndex()
+        index = self.p2pInterface.getIndex()
         self.Pos=index
         self.nextPos = (self.Pos+1)%4
+        self.prevPos = (self.Pos+3)%4
     
     def shuffle(self):
         '''
-        1.每個人洗完牌後交給下一個人
-        2.最後一個人洗完牌後交給第一個人(先懶的寫)
+        有安全洗牌的步驟
+        ...
+        '''
+        if self.encryption:
+            self.procotocol.shuffle(self.p2pInterface)
+            self.procotocol.dealCards(self.p2pInterface)
+            self.cards = self.procotocol.cards
+            return self.cards
+        '''
+        沒有安全洗牌的步驟:
+        1.第一位玩家自己洗完牌後叫給剩下三人
         '''
         if self.Pos == self.dealer:
             cards = [i for i in range(52)]
-            #random.shuffle(cards)
-            msg = {
-                'cards':cards
-            }       
-            self.sendMsg(msg, peerIndex = self.nextPos)
-            msg = self.recvMsg()
-            cards = [int(card) for card in msg['cards']]
+            random.shuffle(cards)
             msg1 = {
+                'type': 'shuffle',
                 'cards':cards[13:26]
             }
-            self.sendMsg(msg1, (self.Pos+1)%4)
+            self.p2pInterface.sendMsg(msg1, (self.Pos+1)%4)
             msg2 = {
+                'type': 'shuffle',
                 'cards':cards[26:39]
             }
-            self.sendMsg(msg2, (self.Pos+2)%4)
+            self.p2pInterface.sendMsg(msg2, (self.Pos+2)%4)
             msg3 = {
+                'type': 'shuffle',
                 'cards':cards[39:52]
             }
-            self.sendMsg(msg3, (self.Pos+3)%4)
+            self.p2pInterface.sendMsg(msg3, (self.Pos+3)%4)
             
             self.cards = sorted(cards[0:13])
         else:
-            msg = self.recvMsg()
-            cards = [int(card) for card in msg['cards']]
-            random.shuffle(cards)
-            msg = {
-                'cards':cards
-            }
-            self.sendMsg(msg, peerIndex = self.nextPos)
-            msg = self.recvMsg()
+            msg = self.p2pInterface.recvMsg(type='shuffle')
             cards = [int(card) for card in msg['cards']]
             self.cards = sorted(cards)
     
@@ -274,16 +286,16 @@ class Bridge(client.p2pInterface):
                 return -1, -1, -1, 0
             #找到莊家
             i = 0
-            declarer = -1
+            declarerPos = -1
             for bid in bidList:
                 if  i == finalPos or i == (finalPos+2)%4:
                     if bid < 35 and bid%5 == finalBid%5:
-                        declarer = (i+dealer)%4
+                        declarerPos = (i+dealer)%4
                         break
                 i = (i+1)%4
             level = finalBid//5
             trump = finalBid%5
-            return level, trump, declarer, double
+            return level, trump, declarerPos, double
     
         def isBidFinish(bidList:list[int]):
             if len(bidList) < 4:
@@ -292,10 +304,10 @@ class Bridge(client.p2pInterface):
                 return 1
             return 0
             
-        def getDealName(level:int, trump:int, declarer:int, double:int):
+        def getDealName(level:int, trump:int, declarerPos:int, double:int):
             if level == -1:
                 return 'AP'
-            return f'{LevelName[level]}{TrumpsName[trump]}{PostionName[declarer]}{DoubleName[double]}'
+            return f'{LevelName[level]}{TrumpsName[trump]}{PostionName[declarerPos]}{DoubleName[double]}'
         
         def bidOne(bidList:list[int]):
             bid = input('叫牌')
@@ -309,51 +321,55 @@ class Bridge(client.p2pInterface):
             bidList = []
             bidOne(bidList)
             msg = {
+                'type': 'bid',
                 'bidList': bidList,
                 'from': self.Pos,
                 'next': self.nextPos,
             }
-            self.sendMsg(msg)
+            self.p2pInterface.sendMsg(msg)
 
         while True:
-            msg = self.recvMsg()
+            msg = self.p2pInterface.recvMsg()
             bidList = msg['bidList']
             bidList = [int(bid) for bid in bidList]
             self.display(isDisplayBid=1, bidList=bidList, isDisplayCards=1, cards=self.cards)
+            if int(msg['next']) == -1:#叫牌結束
+                self.level      = int(msg['deal']['level'])
+                self.trump      = int(msg['deal']['trump'])
+                self.declarerPos   = int(msg['deal']['declarerPos'])
+                self.double     = int(msg['deal']['double'])
+                self.dealName   = msg['deal']['dealName']
+                break
             if int(msg['next']) == self.Pos:##輪到自己叫牌
                 bidOne(bidList)
                 if isBidFinish(bidList):
-                    self.level, self.trump, self.declarer, self.double = findDeal(bidList, self.dealer)
-                    self.dealName = getDealName(self.level, self.trump, self.declarer, self.double)
+                    self.level, self.trump, self.declarerPos, self.double = findDeal(bidList, self.dealer)
+                    self.dealName = getDealName(self.level, self.trump, self.declarerPos, self.double)
                     msg = {
+                        'type': 'bidOver',
                         'bidList': bidList,
                         'from': self.Pos,
                         'next': -1,
                         'deal': {
                             'level': self.level,
                             'trump': self.trump,
-                            'declarer': self.declarer,
-                            'leader': (self.declarer+1)%4,
+                            'declarerPos': self.declarerPos,
+                            'leader': (self.declarerPos+1)%4,
                             'double': self.double,
                             'dealName': self.dealName,
                         }
                     }
-                    self.sendMsg(msg)
+                    self.p2pInterface.sendMsg(msg)
                     break
                 else:
                     msg = {
+                        'type': 'bid',
                         'bidList': bidList,
                         'from': self.Pos,
                         'next': self.nextPos,
                     }
-                    self.sendMsg(msg)
-            if int(msg['next']) == -1:#叫牌結束
-                self.level      = int(msg['deal']['level'])
-                self.trump      = int(msg['deal']['trump'])
-                self.declarer   = int(msg['deal']['declarer'])
-                self.double     = int(msg['deal']['double'])
-                self.dealName   = msg['deal']['dealName']
-                break
+                    self.p2pInterface.sendMsg(msg)
+            
     
     def play(self):
         '''
@@ -364,7 +380,7 @@ class Bridge(client.p2pInterface):
         playerPos: 0 N 1 E 2 S 3 W
         declarerTrick: 莊家贏的墩數
         defenderTrick: 防家贏的墩數
-        round: 第幾輪
+        roundNum: 第幾輪
         '''
         def isValidCard(card:int, cards:list[int], oneRoundCards:list[int]):
             if card not in cards:
@@ -413,141 +429,132 @@ class Bridge(client.p2pInterface):
                 return
             for self.roundNum in range(13):
                 playOneRound()
+
+        def dummyLaid():
+
+            if self.Pos == self.dummyPos:
+                msg = {
+                    'type': 'laid',
+                    'dummyCards': self.cards,
+                    'from': self.Pos,
+                }
+                self.p2pInterface.sendMsg(msg, peerIndex = -1)
+            else:
+                msg = self.p2pInterface.recvMsg(type='laid')
+                dummyCards = msg['dummyCards']
+                dummyCards = [int(card) for card in dummyCards]
+                print(dummyCards)
+                return
+        
         def playOneRound():
-            self.display(isDisplayCards=1, cards=self.cards, isDisplayDeal=1, 
+            self.playPos = self.leadPos
+            self.oneRoundCards = []
+            for _ in range(4):
+                #顯示畫面
+                self.display(isDisplayCards=1, cards=self.cards, isDisplayDeal=1, 
                 deal={
                     'roundNum': self.roundNum,
                     'declarerTrick': self.declarerTrick,
                     'defenderTrick': self.defenderTrick,
-                    'dealName': self.dealName
-            })
-            if self.leadPos == self.Pos:
-                oneRoundCards = []
-                playOneCard(oneRoundCards)
-                msg = {
-                    'type': 'play',
-                    'oneRoundCards': oneRoundCards,
-                    'roundNum': self.roundNum,
-                    'from': self.Pos,
-                    'next': self.nextPos,
-                }
-                self.sendMsg(msg)
-            while True:
-                msg = self.recvMsg()
-                if self.roundNum == 0 and self.Pos == self.dummy and msg['next'] == self.Pos:#夢家攤牌
+                    'dealName': self.dealName,
+                    'oneRoundCards': self.oneRoundCards
+                })
+                if _ == 1 and self.roundNum==0:#夢家攤牌
                     dummyLaid()
-                
-                if msg['type'] == 'play':# 其他人出牌
-                    oneRoundCards = msg['oneRoundCards']
-                    oneRoundCards = [int(card) for card in oneRoundCards]
-                    if int(msg['next']) == self.Pos:
-                        playOneCard(oneRoundCards)
-                        if len(oneRoundCards) == 4:
-                            winner = compare4Cards(oneRoundCards, self.trump, self.leadPos)
-                            self.leadPos = winner
-                            self.trick += (winner+self.Pos)%2 == 0
-                            self.declarerTrick += (winner+self.declarer)%2 == 0
-                            self.defenderTrick += (winner+self.declarer)%2 != 0
-                            msg = {
-                                'type': 'play',
-                                'oneRoundCards': oneRoundCards,
-                                'roundNum': self.roundNum,
-                                'from': self.Pos,
-                                'next': -1,
-                                'winner': winner,
-                            }
-                            self.sendMsg(msg)
-                            break
-                        else:
-                            msg = {
-                                'type': 'play',
-                                'oneRoundCards': oneRoundCards,
-                                'roundNum': self.roundNum,
-                                'from': self.Pos,
-                                'next': self.nextPos,
-                            }
-                            self.sendMsg(msg)
-                    elif len(oneRoundCards) == 4:#結算
-                        winner = int(msg['winner'])
-                        self.leadPos = winner
-                        self.trick += (winner+self.Pos)%2 == 0
-                        self.declarerTrick += (winner+self.declarer)%2 == 0
-                        self.defenderTrick += (winner+self.declarer)%2 != 0
-                        break
-                if msg['type'] == 'dummy' and self.Pos == self.declarer:#幫夢家出牌
-                    oneRoundCards = msg['oneRoundCards']
-                    oneRoundCards = [int(card) for card in oneRoundCards]
-                    dummycards = msg['dummyCards']
-                    dummycards = [int(card) for card in dummycards]
-                    card = self.toCardNum(input('請幫夢家出牌'))
-                    while not isValidCard(card, dummycards, oneRoundCards):
-                        card = self.toCardNum(input('請重新出牌'))
-                    msg = {
-                        'type': 'dummy',
-                        'card': card,
-                        'from': self.Pos,
-                        'next': -1,
-                    }
-                    self.sendMsg(msg, peerIndex = self.dummy)
-                if msg['type'] == 'laid':
-                    pass
+                #出牌
+                if self.Pos == self.playPos:
+                    playOneCard()
+                else:
+                    otherPlayOneCard()
+                self.playPos = (self.playPos+1)%4
+            #每圈結算
+            winner = compare4Cards(self.oneRoundCards, self.trump, self.leadPos)
+            self.leadPos = winner
+            self.trick += (winner+self.Pos)%2 == 0
+            self.declarerTrick += (winner+self.declarerPos)%2 == 0
+            self.defenderTrick += (winner+self.declarerPos)%2 != 0
 
-        def dummyLaid():
-            assert self.Pos == self.dummy
-            msg = {
-                'type': 'laid',
-                'dummyCards': self.cards,
-                'from': self.Pos,
-                'next': -1,
-            }
-            self.sendMsg(msg)
-
-        def playOneCard(oneRoundCards:list[int]):
-            if self.Pos == self.dummy:#叫莊家決定
+        def playOneCard():
+            #決定card_val
+            if self.Pos == self.dummyPos:#叫莊家決定
                 msg = {
                     'type': 'dummy',
                     'dummyCards': self.cards,
-                    'oneRoundCards': oneRoundCards,
-                    'from': self.Pos,
-                    'next': self.declarer,
+                    'oneRoundCards': self.oneRoundCards,
+                    'from': self.Pos
                 }
-                self.sendMsg(msg, peerIndex = self.declarer)
-                msg = self.recvMsg()
-                card = int(msg['card'])
-                self.cards.remove(card)
-                oneRoundCards.append(card)
-                return
-            card = input('請出牌')
-            card = self.toCardNum(card)
-            while not isValidCard(card, self.cards, oneRoundCards):
-                card = input('請重新出牌')
-                card = self.toCardNum(card)
-            self.cards.remove(card)
-            oneRoundCards.append(card)
+                self.p2pInterface.sendMsg(msg, peerIndex = self.declarerPos)
+                msg = self.p2pInterface.recvMsg('declare')
+                card_val = int(msg['card'])
+            else:
+                card_val = input('請出牌')
+                card_val = self.toCardNum(card_val)
+                while not isValidCard(card_val, self.cards, self.oneRoundCards):
+                    card_val = input('請重新出牌')
+                    card_val = self.toCardNum(card_val)
+            if self.encryption:#如果有加密功能，叫其他人驗證
+                ok = self.procotocol.playCards(self.p2pInterface, card_val)
+                if not ok:
+                    print("牌被多人质疑！中断本轮出牌。")
+                    return -1
+            else:#否則單純送出資料
+                self.p2pInterface.sendMsg(
+                    {
+                        'type': 'play card',
+                        'Pos': self.Pos,
+                        'card_val':card_val
+                    }, peerIndex=-1
+                )
+            self.cards.remove(card_val)
+            self.oneRoundCards.append(card_val)
             return
         
+        def otherPlayOneCard():
+            if self.Pos == self.declarerPos and self.playPos == self.dummyPos:#幫莊家出牌
+                msg =self.p2pInterface.recvMsg(type='dummy')
+                dummycards = msg['dummyCards']
+                dummycards = [int(card) for card in dummycards]
+                card_val = self.toCardNum(input('請幫夢家出牌'))
+                while not isValidCard(card_val, dummycards, self.oneRoundCards):
+                    card_val = self.toCardNum(input('請重新出牌'))
+                msg = {
+                    'type': 'declare',
+                    'card': card_val,
+                    'from': self.Pos,
+                }
+                self.p2pInterface.sendMsg(msg, peerIndex = self.dummyPos)
+            if self.encryption:#如果有加密功能，則驗證其他人的牌
+                card_val, sender = self.procotocol.otherplayCards(self.p2pInterface)
+                if card_val == -1 or sender != self.playPos:
+                    return -1
+            else:
+                msg = self.p2pInterface.recvMsg(type='play card')
+                card_val = msg['card_val']
+            self.oneRoundCards.append(card_val)
+            return
+            
         def initPlay():
-            self.leadPos = (self.declarer+1)%4
+            self.leadPos = (self.declarerPos+1)%4
             self.roundNum = 0
             self.declarerTrick = 0
             self.defenderTrick = 0
             self.trick = 0
             self.trump = self.trump
             self.vul = self.vul
-            self.dummy = (self.declarer+2)%4
+            self.dummyPos = (self.declarerPos+2)%4
 
-        def calculateScore(level, trump, declarer, vul, double, declarerTrick):
+        def calculateScore(level, trump, declarerPos, vul, double, declarerTrick):
             #要吃敦數=level+7, level=0,...,6
             #trump:nt=4,s=3,h=2,d=1,c=0
             #double:none=0,x=1,xx=2
-            def isVul(declarer, vul):
-                if declarer == 0 or declarer == 2:
+            def isVul(declarerPos, vul):
+                if declarerPos == 0 or declarerPos == 2:
                     return vul == 1 or vul == 3
                 else:
                     return vul ==2 or vul == 3
             if level == -1:#AP
                 return 0
-            vulnerable = isVul(declarer, vul)
+            vulnerable = isVul(declarerPos, vul)
 
             contractTricks = level + 7
             made = declarerTrick >= contractTricks
@@ -617,30 +624,31 @@ class Bridge(client.p2pInterface):
                     penalty *= double == 2 and 2 or 1  # redouble doubles penalty
                 score -= penalty
             #分數是以南北家為基準
-            if declarer == 1 or declarer == 3:
+            if declarerPos == 1 or declarerPos == 3:
                 score = -score
             return score
         
         def settleScore():
-            if self.Pos == self.declarer:
-                self.score = calculateScore(self.level, self.trump, self.declarer, self.vul, self.double, self.declarerTrick)
+            
+            if self.Pos == self.dealer:
+                self.score = calculateScore(self.level, self.trump, self.declarerPos, self.vul, self.double, self.declarerTrick)
                 msg = {
                     'type': 'result',
                     'deal': {
                         'boradId': self.boradId,
                         'level': self.level,
                         'trump': self.trump,
-                        'declarer': self.declarer,
+                        'declarerPos': self.declarerPos,
                         'double':self.double,
                         'vul':self.vul,
                         'declarerTrick': self.declarerTrick,
                         'score': self.score
                     }
                 }
-                self.sendMsg(msg)
+                self.p2pInterface.sendMsg(msg)
                 print(self.score)
             else:
-                msg = self.recvMsg()
+                msg = self.p2pInterface.recvMsg(type='result')
                 self.score = int(msg['deal']['score'])
                 print(self.score)
                     
@@ -649,15 +657,13 @@ class Bridge(client.p2pInterface):
         settleScore()
   
     def run(self):
-        self.decidePosition()
         for i in range(8):
             self.boradInit(i)
-            print(self.boradId, self.dealer)
             self.shuffle()
             self.bid()
-            print(self.dealName)
             self.play()
 
 if __name__=='__main__':
-    bridge = Bridge()
+    p2pInterface = client.p2pInterface(isSignature = True)
+    bridge = Bridge(p2pInterface=p2pInterface, encryption = False)
     bridge.run()
