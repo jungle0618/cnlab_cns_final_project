@@ -1,17 +1,17 @@
 import random
 import client
 from protocol import Protocol
-SuitName = ['C', 'D', 'H', 'S']
+SuitName = ["C', 'D', 'H', 'S"]
 SuitNum = {
     'C': 0, 'D': 1, 'H': 2, 'S': 3
 }
-RankName = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']
+RankName = ["2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A"]
 RankNum = {
     '2': 0, '3': 1, '4': 2, '5': 3, '6': 4,
     '7': 5, '8': 6, '9': 7, 'T': 8,
     'J': 9, 'Q': 10, 'K': 11, 'A': 12
 }
-VulName = ['N', 'NS', 'EW', 'B']
+VulName = ["N', 'NS', 'EW', 'B"]
 VulNum = {
     'N': 0, 'NS': 1, 'EW': 2, 'B': 3
 }
@@ -47,19 +47,19 @@ BidNum = {
     '7C': 30, '7D': 31, '7H': 32, '7S': 33, '7N': 34,
     'P': 35, 'X': 36, 'XX': 37
 }
-LevelName = ['1', '2', '3', '4', '5', '6', '7']
+LevelName = ["1', '2', '3', '4', '5', '6', '7"]
 LevelNum = {
     '1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '7': 6
 }
-TrumpsName = ['C', 'D', 'H', 'S', 'N']
+TrumpsName = ["C', 'D', 'H', 'S', 'N"]
 TrumpsNum = {
     'C': 0, 'D': 1, 'H': 2, 'S': 3, 'N': 4
 }
-PostionName = ['N', 'E', 'S', 'W']
+PostionName = ["N', 'E', 'S', 'W"]
 PostionNum = {
     'N': 0, 'E': 1, 'S': 2, 'W': 3
 }
-DoubleName = ['', 'X', 'XX']
+DoubleName = ["', 'X', 'XX"]
 DoubleNum = {
     '': 0, 'X': 1, 'XX': 2
 }
@@ -135,7 +135,7 @@ class Bridge(client.p2pInterface):
 
         bid_strs = [self.toBidName(b) for b in bidList]
         # Direction labels
-        directions = ['N', 'E', 'S', 'W']
+        directions = ["N', 'E', 'S', 'W"]
         if not (0 <= dealer < 4):
             raise ValueError(f"Dealer index must be between 0 and 3, got {dealer}")
 
@@ -146,7 +146,7 @@ class Bridge(client.p2pInterface):
         # Pad the bids list so its length is a multiple of 4
         rem = len(bid_strs) % 4
         if rem:
-            bid_strs += [''] * (4 - rem)
+            bid_strs += [""] * (4 - rem)
 
         # Print each round of four bids
         for i in range(0, len(bid_strs), 4):
@@ -155,18 +155,18 @@ class Bridge(client.p2pInterface):
 
     def displayCards(self, cards:list):
         for i in range(3,-1,-1):
-            str = f'{SuitName[i]}: '
+            str = f" {SuitName[i]}: "
             for j in range(12,-1,-1):
                 if 13*i+j in cards:
-                    str += f'{RankName[j]}'
+                    str += f" {RankName[j]} "
             print(str)
     
     def displayDeal(self, deal:dict):
-        print(f'{deal['dealName']}')
-        print(f'roundNum: {deal['roundNum']}')
-        print(f'declarerTrick: {deal['declarerTrick']}')
-        print(f'defenderTrick: {deal['defenderTrick']}')
-        oneRoundCards:list[int] = deal['oneRoundCards']
+        print(f'{deal["dealName"]}')
+        print(f'roundNum: {deal["roundNum"]}')
+        print(f'declarerTrick: {deal["declarerTrick"]}')
+        print(f'defenderTrick: {deal["defenderTrick"]}')
+        oneRoundCards:list[int] = deal["oneRoundCards"]
         str = ''
         for card in oneRoundCards:
             str+=self.toCardName(card)+' '
@@ -230,7 +230,7 @@ class Bridge(client.p2pInterface):
             self.cards = sorted(cards[0:13])
         else:
             msg = self.p2pInterface.recvMsg(type='shuffle')
-            cards = [int(card) for card in msg['cards']]
+            cards = [int(card) for card in msg["cards"]]
             self.cards = sorted(cards)
     
     def bid(self):
@@ -328,17 +328,17 @@ class Bridge(client.p2pInterface):
 
         while True:
             msg = self.p2pInterface.recvMsg()
-            bidList = msg['bidList']
+            bidList = msg["bidList"]
             bidList = [int(bid) for bid in bidList]
             self.display(isDisplayBid=1, bidList=bidList, isDisplayCards=1, cards=self.cards)
-            if int(msg['next']) == -1:#叫牌結束
-                self.level      = int(msg['deal']['level'])
-                self.trump      = int(msg['deal']['trump'])
-                self.declarerPos   = int(msg['deal']['declarerPos'])
-                self.double     = int(msg['deal']['double'])
-                self.dealName   = msg['deal']['dealName']
+            if int(msg["next"]) == -1:#叫牌結束
+                self.level      = int(msg["deal"]["level"])
+                self.trump      = int(msg["deal"]["trump"])
+                self.declarerPos   = int(msg["deal"]["declarerPos"])
+                self.double     = int(msg["deal"]["double"])
+                self.dealName   = msg["deal"]["dealName"]
                 break
-            if int(msg['next']) == self.Pos:##輪到自己叫牌
+            if int(msg["next"]) == self.Pos:##輪到自己叫牌
                 bidOne(bidList)
                 if isBidFinish(bidList):
                     self.level, self.trump, self.declarerPos, self.double = findDeal(bidList, self.dealer)
@@ -439,7 +439,7 @@ class Bridge(client.p2pInterface):
                 self.p2pInterface.sendMsg(msg, peerIndex = -1)
             else:
                 msg = self.p2pInterface.recvMsg(type='laid')
-                dummyCards = msg['dummyCards']
+                dummyCards = msg["dummyCards"]
                 dummyCards = [int(card) for card in dummyCards]
                 print(dummyCards)
                 return
@@ -483,7 +483,7 @@ class Bridge(client.p2pInterface):
                 }
                 self.p2pInterface.sendMsg(msg, peerIndex = self.declarerPos)
                 msg = self.p2pInterface.recvMsg('declare')
-                card_val = int(msg['card'])
+                card_val = int(msg["card"])
             else:
                 card_val = input('請出牌')
                 card_val = self.toCardNum(card_val)
@@ -510,7 +510,7 @@ class Bridge(client.p2pInterface):
         def otherPlayOneCard():
             if self.Pos == self.declarerPos and self.playPos == self.dummyPos:#幫莊家出牌
                 msg =self.p2pInterface.recvMsg(type='dummy')
-                dummycards = msg['dummyCards']
+                dummycards = msg["dummyCards"]
                 dummycards = [int(card) for card in dummycards]
                 card_val = self.toCardNum(input('請幫夢家出牌'))
                 while not isValidCard(card_val, dummycards, self.oneRoundCards):
@@ -527,7 +527,7 @@ class Bridge(client.p2pInterface):
                     return -1
             else:
                 msg = self.p2pInterface.recvMsg(type='play card')
-                card_val = msg['card_val']
+                card_val = msg["card_val"]
             self.oneRoundCards.append(card_val)
             return
             
@@ -646,7 +646,7 @@ class Bridge(client.p2pInterface):
                 print(self.score)
             else:
                 msg = self.p2pInterface.recvMsg(type='result')
-                self.score = int(msg['deal']['score'])
+                self.score = int(msg["deal"]["score"])
                 print(self.score)
                     
         initPlay()

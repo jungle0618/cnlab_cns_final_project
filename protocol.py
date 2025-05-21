@@ -82,8 +82,8 @@ class Protocol:
         p2pInterface.sendMsg(msg, -1)
         for i in range(self.nPlayer-1):
             msg = p2pInterface.recvMsg()
-            Pos = int(msg['Pos'])
-            points = msg['points']
+            Pos = int(msg["Pos"])
+            points = msg["points"]
             self.allP[Pos] = [None]*self.nCards
             for j in range(self.nCards):
                 self.allP[Pos][j] = self.toPoint(points[j])
@@ -94,7 +94,7 @@ class Protocol:
         
 
     def toPoint(self, point):
-        return Point(curve, int(point['x']), int(point['y']))
+        return Point(curve, int(point["x"]), int(point["y"]))
     
     def toDict(self, point):
         return {
@@ -110,7 +110,7 @@ class Protocol:
             cards = copy.deepcopy(self.initP)
         else:
             msg = p2pInterface.recvMsg()
-            cards = [self.toPoint(card) for card in msg['cards']]
+            cards = [self.toPoint(card) for card in msg["cards"]]
         cards = self.shuffle1(cards)
         cards = self.encryptCardsbyOneKey(cards)
         
@@ -121,7 +121,7 @@ class Protocol:
         }, self.nextPos)
         #用自己的大K解密後用小k加密
         msg = p2pInterface.recvMsg()
-        cards = [self.toPoint(card) for card in msg['cards']]
+        cards = [self.toPoint(card) for card in msg["cards"]]
         cards = self.decryptCardsbyOneKey(cards)
         cards = self.encryptCardsbyKey(cards)
         cards = [self.toDict(card) for card in cards]
@@ -139,7 +139,7 @@ class Protocol:
             'type': 'shuffle',
             },self.nextPos)
             msg = p2pInterface.recvMsg()
-            self.finalP = [self.toPoint(card) for card in msg['cards']]
+            self.finalP = [self.toPoint(card) for card in msg["cards"]]
           
     def dealCards(self, p2pInterface: client.p2pInterface):#將牌發給每個人
         for Pos in range(self.nPlayer):
@@ -162,12 +162,12 @@ class Protocol:
         received = 0
         while received < self.nPlayer - 1:
             msg = p2pInterface.recvMsg()
-            if msg['type'] != 'provide_keys':
+            if msg["type"] != 'provide_keys':
                 continue  # 跳过非预期消息
-            sender = int(msg['Pos'])
-            for item in msg['keys']:
-                card_id = int(item['index'])
-                key_k    = int(item['key'])
+            sender = int(msg["Pos"])
+            for item in msg["keys"]:
+                card_id = int(item["index"])
+                key_k    = int(item["key"])
                 self.allK[sender][card_id] = key_k
             received += 1
 
@@ -191,16 +191,16 @@ class Protocol:
         received_reqs = 0
         while received_reqs < self.nPlayer - 1:
             msg = p2pInterface.recvMsg()
-            if msg['type'] != 'request_keys':
-                sender = int(msg['Pos'])
-                for item in msg['keys']:
-                    card_id = int(item['index'])
-                    key_k    = int(item['key'])
+            if msg["type"] != 'request_keys':
+                sender = int(msg["Pos"])
+                for item in msg["keys"]:
+                    card_id = int(item["index"])
+                    key_k    = int(item["key"])
                     self.allK[sender][card_id] = key_k
                 received_reqs += 1
                 continue
-            requester = int(msg['Pos'])
-            IDs = msg['IDs']
+            requester = int(msg["Pos"])
+            IDs = msg["IDs"]
             # 把自己这份 small-k 发回给 requester
             resp = {
                 'type': 'provide_keys',
@@ -226,7 +226,7 @@ class Protocol:
         while received_reqs < self.nPlayer-1:
             msg = p2pInterface.recvMsg(type='check card')
             print(msg)
-            if msg['msg'] == 'ok':
+            if msg["msg"] == 'ok':
                 received_reqs += 1
             else:
                 print('play card_id error')
@@ -234,10 +234,10 @@ class Protocol:
         return 1
     def otherplayCards(self, p2pInterface: client.p2pInterface):#回傳值和sender
         msg = p2pInterface.recvMsg(type='play card')
-        card_id = int(msg['card_id'])
-        card_val = int(msg['card_val'])
-        key = int(msg['key'])
-        sender = int(msg['Pos'])
+        card_id = int(msg["card_id"])
+        card_val = int(msg["card_val"])
+        key = int(msg["key"])
+        sender = int(msg["Pos"])
         self.allK[sender][card_id] = key
         k_prod = 1
         for player in range(self.nPlayer):
