@@ -25,7 +25,7 @@ class Protocol:
         #self.finalSuffle = [None]*nPlayer#finalSuffle[i]是洗完牌後的第i張牌原本的值
         for i in range(nCards):
             self.allK[self.Pos][i] = int.from_bytes(secrets.token_bytes(32), "big")
-            self.allP[self.Pos][i] = int.from_bytes(secrets.token_bytes(32))*G
+            self.allP[self.Pos][i] = int.from_bytes(secrets.token_bytes(32), "big")*G
         self.id_to_val=[None]*nCards#id_to_val[3]=7表示洗完的牌從上面數下來第三張為7
 
     def encrypt(self, P, k):#P -> kP

@@ -75,7 +75,17 @@ class Worker:
 
     def getListenAddr(self):
         assert self.socketType == 'listen'
-        host, port = self.socket.getsockname()
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # 不用真的連，只是借用路由表來得知出站 IP
+            s.connect(('8.8.8.8', 80))
+            host = s.getsockname()[0]
+        except Exception:
+            host = '127.0.0.1'
+        finally:
+            s.close()
+
+        port = self.socket.getsockname()[1]
         return host, port
 
     def tryConnection(self):

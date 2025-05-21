@@ -1,17 +1,17 @@
 import random
 import client
 from protocol import Protocol
-SuitName = ["C', 'D', 'H', 'S"]
+SuitName = ['C', 'D', 'H', 'S']
 SuitNum = {
     'C': 0, 'D': 1, 'H': 2, 'S': 3
 }
-RankName = ["2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A"]
+RankName = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']
 RankNum = {
     '2': 0, '3': 1, '4': 2, '5': 3, '6': 4,
     '7': 5, '8': 6, '9': 7, 'T': 8,
     'J': 9, 'Q': 10, 'K': 11, 'A': 12
 }
-VulName = ["N', 'NS', 'EW', 'B"]
+VulName = ['N', 'NS', 'EW', 'B']
 VulNum = {
     'N': 0, 'NS': 1, 'EW': 2, 'B': 3
 }
@@ -47,19 +47,19 @@ BidNum = {
     '7C': 30, '7D': 31, '7H': 32, '7S': 33, '7N': 34,
     'P': 35, 'X': 36, 'XX': 37
 }
-LevelName = ["1', '2', '3', '4', '5', '6', '7"]
+LevelName = ['1', '2', '3', '4', '5', '6', '7']
 LevelNum = {
     '1': 0, '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '7': 6
 }
-TrumpsName = ["C', 'D', 'H', 'S', 'N"]
+TrumpsName = ['C', 'D', 'H', 'S', 'N']
 TrumpsNum = {
     'C': 0, 'D': 1, 'H': 2, 'S': 3, 'N': 4
 }
-PostionName = ["N', 'E', 'S', 'W"]
+PostionName = ['N', 'E', 'S', 'W']
 PostionNum = {
     'N': 0, 'E': 1, 'S': 2, 'W': 3
 }
-DoubleName = ["', 'X', 'XX"]
+DoubleName = ['', 'X', 'XX']
 DoubleNum = {
     '': 0, 'X': 1, 'XX': 2
 }
