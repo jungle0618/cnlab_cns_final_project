@@ -67,8 +67,6 @@ DoubleNum = {
 import os
 import platform
 
-
-
 class Bridge(client.p2pInterface):
     boradId: int#牌號
     dealer: int#開叫人
@@ -316,7 +314,7 @@ class Bridge(client.p2pInterface):
                 bid = input('叫品不合法，請重新叫牌')
                 bid = self.toBidNum(bid)
             bidList.append(bid)
-        
+        print(self.Pos, self.dealer)
         if self.Pos == self.dealer:
             bidList = []
             bidOne(bidList)
@@ -629,7 +627,6 @@ class Bridge(client.p2pInterface):
             return score
         
         def settleScore():
-            
             if self.Pos == self.dealer:
                 self.score = calculateScore(self.level, self.trump, self.declarerPos, self.vul, self.double, self.declarerTrick)
                 msg = {
@@ -665,5 +662,5 @@ class Bridge(client.p2pInterface):
 
 if __name__=='__main__':
     p2pInterface = client.p2pInterface(isSignature = True)
-    bridge = Bridge(p2pInterface=p2pInterface, encryption = False)
+    bridge = Bridge(p2pInterface=p2pInterface, encryption = True)
     bridge.run()

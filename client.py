@@ -19,43 +19,202 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 logger = logging.getLogger(__name__)
-serverHost = '0.0.0.0'
+serverHost = '140.112.30.186'
 serverPort = 9999
 
-def send_and_receive_json(socket, msg):
-    send_json(socket, msg)
-    
-    return wait_json(socket)
+class Worker:
+    # 每個worker只能處理一個socket
+    STATUS_IDLE = 0
+    STATUS_BUSY = 1
+    STATUS_WAIT = 2
 
-def send_json(socket, msg):
-    logger.debug(f'send {msg}')
-    msg_json = json.dumps(msg)
-    socket.sendall(msg_json.encode('utf-8'))
-
-def wait_json(socket, size=1024*64):
-    data = socket.recv(size)
-    data = data.decode('utf-8')
-    logger.debug(f'recv {data}')
-    data = json.loads(data)
-    return data
-
-class worker:  # 每個worker只能處理一個socket
-    def __init__(self, workerId, tpoolMsgQueue: queue.Queue):
+    def __init__(self, workerId: int, Worker2PoolQueue: queue.Queue):
         self.workerId = workerId
-        self.msgQueue = queue.Queue()  # 接收提交的任務
+        # 主 pool -> Worker 任務隊列
+        self.Pool2WorkerQueue: queue.Queue = queue.Queue()
+        # Worker -> 主 pool 回報隊列
+        self.Worker2PoolQueue: queue.Queue = Worker2PoolQueue
+        self.status = Worker.STATUS_IDLE
+        self.socketType = ''
+        self.isConnect = False
+        self.socket: socket.socket = None
+        self.peerSocket: socket.socket = None
+        self.peerIndex = -1
+        self.peerHost = ''
+        self.peerPort = -1
+
+        self.cond = threading.Condition()
+
+    def recvMsg(self) -> bytes:
+        assert self.isConnect
+        sock = self.socket if self.socketType == 'connect' else self.peerSocket
+        return sock.recv(65536)
+
+    def sendMsg(self, msg: dict) -> int:
+        assert self.isConnect
+        data = json.dumps(msg) + '\n'
+        sock = self.socket if self.socketType == 'connect' else self.peerSocket
+        sock.sendall(data.encode('utf-8'))
+        return 1
+
+    def setPeerInfo(self, peerIndex: int = -1, host: str = '', port: int = -1):
+        self.peerIndex = peerIndex
+        self.peerHost = host
+        self.peerPort = port
+
+    def createSocket(self, socketType: str):
+        self.socketType = socketType
+        self.isConnect = False
+        self.status = Worker.STATUS_BUSY
+        if socketType == 'connect':
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        else:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.bind(('0.0.0.0', 0))
+            self.socket.listen()
+
+    def getListenAddr(self):
+        assert self.socketType == 'listen'
+        host, port = self.socket.getsockname()
+        return host, port
+
+    def tryConnection(self):
+        try:
+            if self.socketType == 'connect':
+                print('try connect')
+                print(self.peerHost, self.peerPort)
+                self.socket.connect((self.peerHost, self.peerPort))
+                print('connect ok')
+                sock = self.socket
+                
+            else:
+                sock, _ = self.socket.accept()
+                
+                self.peerSocket = sock
+            self.isConnect = True
+            self.Worker2PoolQueue.put({'from': self.workerId, 'data': {'command': 'connect_success', 'peerIndex': self.peerIndex}})
+        except Exception as e:
+            print('connect error')
+            logger.error(f'Connection error: {e}')
+            self.cleanup()
+            self.status = Worker.STATUS_IDLE
+            # 通知 pool 失敗
+            self.Worker2PoolQueue.put({'from': self.workerId, 'data': {'command': 'connect_error', 'peerIndex': self.peerIndex}})
+
+    def runLoop(self):
+        while True:
+            try:
+                raw = self.recvMsg()
+                if not raw:
+                    break
+                text = raw.decode('utf-8')
+                for line in text.split('\n'):
+                    if not line:
+                        continue
+                    payload = json.loads(line)
+                    self.Worker2PoolQueue.put({'from': self.workerId, 'data': payload})
+            except Exception as e:
+                logger.error(f'Receive error: {e}')
+                break
+        self.cleanup()
+        self.status = Worker.STATUS_IDLE
+
+    def cleanup(self):
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+        if self.peerSocket:
+            try:
+                self.peerSocket.close()
+            except:
+                pass
+        self.isConnect = False
+
+    def run(self):
+        self.tryConnection()
         
-        self.status = 0  # 0:空閒 1:使用中 2:等待
-        self.tpoolMsgQueue = tpoolMsgQueue  # 回報結果
-    def server_run(self, serverHost='0.0.0.0', serverPort=9999):
-        self.connectType = 'server'
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.host, self.port = self.socket.getsockname()
-        self.socket.connect((serverHost, serverPort))
-        data = wait_json(self.socket)
-        if data['status'] != 200:
+        if self.isConnect:
+            logger.debug(f'connection success {self.peerIndex}')
+            self.runLoop()
+    
+
+
+class SocketPool:
+    def __init__(self, maxThreads=10):
+        self.maxThreads = maxThreads
+        self.Worker2PoolQueue = queue.Queue()
+        self.threadPool = ThreadPoolExecutor(max_workers=self.maxThreads)
+        self.workers:list[Worker] = [Worker(i, Worker2PoolQueue=self.Worker2PoolQueue) for i in range(self.maxThreads)]  # worker[0]連接到server
+        self.Tpool2MainQueue = queue.Queue()  # 主函式要用的queue
+
+    def find_free_worker(self) -> Worker:
+        for worker in self.workers:
+            if worker.status == Worker.STATUS_IDLE and worker.workerId != 0:
+                worker.status = Worker.STATUS_BUSY
+                return worker
+        return None
+
+    def findThreadwithPeerIndex(self, peerIndex) -> Worker:
+        for worker in self.workers:
+            if worker.status == Worker.STATUS_BUSY and worker.workerId != 0 and worker.peerIndex == peerIndex:
+                return worker
+        return None
+
+    def p2pStart(self):
+        self.p2pConstruct()
+        self.threadPool.submit(self.tpoolStart)
+        return self.Tpool2MainQueue, self.Worker2PoolQueue
+    
+    def tpoolStart(self):  # 處理所有thread的request
+        def mainRequest(data):
+            command = data['command']
+            if command == 'send':
+                peerIndex = int(data["peerIndex"])
+
+                message = data["message"]
+                if peerIndex == -1:  # broadcast
+                    for worker in self.workers:
+                        if worker.status == Worker.STATUS_BUSY and worker.socketType != 'server':
+                            worker.sendMsg(message)
+                else:
+                    worker = self.findThreadwithPeerIndex(peerIndex)
+                    if worker:
+                        worker.sendMsg(message)
+        def p2pSocketRequest(msg):
+            
+            self.Tpool2MainQueue.put(msg)
+            
+        
+        while True:
+            msg = self.Worker2PoolQueue.get()
+            logger.debug(f'tpool recv {msg}')
+            workerId = int(msg['from'])
+            if workerId == -1:  # 來自主程式的request
+                mainRequest(msg["data"])
+            else:  # from p2p thread
+                p2pSocketRequest(msg["data"])
+
+    def p2pConstruct(self):
+        def checkConnectSuccess(workerId):
+            msg, _ =self.getRequest(workerID=workerId)
+            if msg['command'] == 'connect_success':
+                return 1
+            print('connect error')
+            return 0
+        #連線上server
+        self.workers[0].createSocket(socketType='connect')
+        self.workers[0].setPeerInfo(host=serverHost , port=serverPort)
+        self.threadPool.submit(self.workers[0].run)
+        if not checkConnectSuccess(0):
+            return
+        #step1 收到server的要求
+        request, _ = self.getRequest(workerID=0) 
+        if request['status'] != 200:
             return
         '''
-            data={
+            request={
                 "status": 200,
                 "msg": "table is full",
                 "N": 4,
@@ -64,347 +223,80 @@ class worker:  # 每個worker只能處理一個socket
                 "connect socket number": 1
             }
         '''
-        # 跟tpool講要建立多少connect socket和listen socket
-        listenSocketNum = int(data['listen socket number'])
-        connectSocketNum = int(data['connect socket number'])
-        index = int(data['index'])
-        # 建立listen socket
-        # 對所有id<自己的人
-        # index=listenSocketNum
+        self.index = request['index']
+        listenSocketNum = int(request['listen socket number'])
+        connectSocketNum = int(request['connect socket number'])
+        N = int(request['N'])
+
         listenSockets = []
-        # 叫tpool創建socket和thread
         for peerIndex in range(listenSocketNum):
-            
-            # Convert string message to JSON format
-            msg = {
-                "command": "create",
-                "type": "listen",
-                "peerIndex": peerIndex,
-                "index": index
-            }
-
-            
-            self.tpoolMsgQueue.put(json.dumps({
-                "from": self.workerId,
-                "data": msg
-            }))
-        
-
-        for i in range(listenSocketNum):
-            msg_json = self.msgQueue.get()
-            msg = json.loads(msg_json)
-            host = msg["host"]
-            port = msg["port"]
-            peerIndex = msg["peerIndex"]
-            index = msg["index"]
-            listenSocket = {
+            freeWorker = self.find_free_worker()
+            freeWorker.createSocket(socketType='listen')
+            host, port = freeWorker.getListenAddr()
+            freeWorker.setPeerInfo(peerIndex=peerIndex)
+            self.threadPool.submit(freeWorker.run)
+            listenSockets.append({
                 "host": host,
                 "port": port,
-                "peerIndex": index,  # 寫給peer看的所以要反過來
+                "peerIndex": self.index,  # 寫給peer看的所以要反過來
                 "index": peerIndex
-            }
-            listenSockets.append(listenSocket)
+            })
         # 回送給server
-        msg = {
+        self.workers[0].sendMsg({
             "status": 200,
             "msg": 'ok',
             "listenSockets": listenSockets
-        }
-        data = send_and_receive_json(self.socket, msg)
-        if data['status'] != 200:
-            return
-        for connectSocket in data['connectSockets']:
-            peerHost = connectSocket['host']
-            peerPort = connectSocket['port']
-            peerIndex = connectSocket['peerIndex']
-            index = connectSocket['index']
-            # Convert string message to JSON format
-            msg = {
-                "command": "create",
-                "type": "connect",
-                "host": peerHost,
-                "port": peerPort,
-                "peerIndex": peerIndex,
-                "index": index
-            }
+        })
+
+        #收到server要求連線的清單
+        request, _ = self.getRequest(workerID=0)
+        '''request={
+            'status':200,
+            'msg':'ok'
+            'connectSockets':[{
+                'host':...,
+                'port':...,
+                'peerIndex':...,
+                'index':...},
+            ...]
+        }'''
+        for connectSocket in request['connectSockets']:
+            freeWorker = self.find_free_worker()
+            freeWorker.createSocket(socketType='connect')
+            freeWorker.setPeerInfo(peerIndex=int(connectSocket['peerIndex']),
+                                    host=connectSocket['host'],
+                                    port=int(connectSocket['port']))
+            self.threadPool.submit(freeWorker.run)
+        for i in range(N-1):
+            checkConnectSuccess(-1)
+
+        self.workers[0].sendMsg({
+            "status":200,
+            "msg":'p2pOk',
+        })
             
-            self.tpoolMsgQueue.put(json.dumps({
-                "from": self.workerId,
-                "data": msg
-            }))
-        #確定每個socket都成功連線
-        for i in range(listenSocketNum+connectSocketNum):
-            self.msgQueue.get()
-        msg = {
-            "command": "p2p success",
-        }
-        self.tpoolMsgQueue.put(json.dumps({
-            "from": self.workerId,
-            "data": msg
-        }))
+        return
 
-    def connect(self, peerHost, peerPort, peerIndex, index):
-        logger.debug(f'connecting to {peerIndex}')
-        self.socketType = 'connect'
-        self.peerHost = peerHost
-        self.peerPort = peerPort
-        self.peerIndex = peerIndex
-        self.index = index
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        
-        try:
-            self.socket.connect((self.peerHost, self.peerPort))
-            self.socket.sendall(b'hello')
-            self.socket.recv(1024)
-            logger.debug(f'connect to {peerIndex}')
-        except Exception as e:
-            print(f"Error: {e}")
-            return
-        #回報連線完成
-        msg = {
-            "command": "connect success",
-            "peerIndex": self.peerIndex,
-        }
-        self.tpoolMsgQueue.put(json.dumps({
-            "from": self.workerId,
-            "data": msg
-        }))
+    def getRequest(self, workerID=-1):
+        temp = []
         while True:
-            try:
-                msg = self.socket.recv(1024*64)
-                if msg == b'':
-                    print('p2p error')
-                    return
-                msg_decoded = msg.decode('utf-8')
-                logger.debug(f'recv msg {msg_decoded}')
-                lines = [line for line in msg_decoded.split('\n') if line]
-
-                for line in lines:
-                    recv_msg = {
-                        "command": "recv",
-                        "peerIndex": peerIndex,
-                        "message": line
-                    }       
-                    self.tpoolMsgQueue.put(json.dumps({
-                        "from": self.workerId,
-                        "data": recv_msg
-                    }))
-            except Exception as e:
-                self.socket.close()
-                print(f'Error {e}')
-                return
-
-    def listen(self, peerIndex, index):
-        self.socketType = 'listen'
-        self.peerIndex = peerIndex
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.bind(('0.0.0.0', 0))
-        self.socket.listen(2)
-        self.index = index
-        self.host, self.port = self.socket.getsockname()
-        # Convert string message to JSON format
-        create_ok_msg = {
-            "command": "create_ok",
-            "type": "listen",
-            "host": self.host,
-            "port": self.port,
-            "peerIndex": self.peerIndex,
-            "index": index
-        }
-        
-        self.tpoolMsgQueue.put(json.dumps({
-            "from": self.workerId,
-            "data": create_ok_msg
-        }))
-        logger.debug(f'start listening {peerIndex}')
-        try: 
-            self.peer_socket, self.peer_address = self.socket.accept()
-            self.peer_socket.sendall(b'hello')
-            self.peer_socket.recv(1024*64)
-            logger.debug(f'listen to {peerIndex}')
-        except Exception as e:
-            print(f"Error: {e}")
-            return
-        #回報連線完成
-        msg = {
-            "command": "connect success",
-            "peerIndex": self.peerIndex,
-        }
-        self.tpoolMsgQueue.put(json.dumps({
-            "from": self.workerId,
-            "data": msg
-        }))
-        while True:
-            try:
-                msg = self.peer_socket.recv(1024*64)
-                if msg == b'':
-                    print('p2p error')
-                    return
-                msg_decoded = msg.decode('utf-8')
-                logger.debug(f'recv msg {msg_decoded}')
-                lines = [line for line in msg_decoded.split('\n') if line]
-                for line in lines:
-                    recv_msg = {
-                        "command": "recv",
-                        "peerIndex": peerIndex,
-                        "message": line
-                    }       
-                    self.tpoolMsgQueue.put(json.dumps({
-                        "from": self.workerId,
-                        "data": recv_msg
-                    }))
-            except Exception as e:
-                self.socket.close()
-                print(f'Error {e}')
-                return
-
-    def sendMsg(self, msg):
-        msg = json.dumps(msg)
-        if self.socketType == 'connect':
-            self.socket.sendall(msg.encode('utf-8')+b'\n')
-            return 1
-        else:
-            self.peer_socket.sendall(msg.encode('utf-8')+b'\n')
-            return 1
-
-class SocketPool:
-    def __init__(self, maxThreads=10):
-        self.maxThreads = maxThreads
-        self.tpoolMsgQueue = queue.Queue()
-        self.threadPool = ThreadPoolExecutor(max_workers=self.maxThreads)
-        self.workers = [worker(i, self.tpoolMsgQueue) for i in range(self.maxThreads)]  # worker[0]連接到server
-        self.mainQueue = queue.Queue()  # 主函式要用的queue
-
-    def find_free_worker(self):
-        for worker in self.workers:
-            if worker.status == 0 and worker.workerId != 0:
-                worker.status = 1
-                return worker
-        return None
-
-    def p2pStart(self):
-        self.cond = threading.Condition()
-        self.threadPool.submit(self.tpoolStart)
-        self.threadPool.submit(self.workers[0].server_run, serverHost, serverPort)
-        with self.cond:#等待p2p連線完成
-            self.cond.wait()
-        print('p2p success')
-        return self.tpoolMsgQueue, self.mainQueue
-
-    def findThreadwithPeerIndex(self, peerIndex):
-        for worker in self.workers:
-            if worker.status == 1 and worker.workerId != 0 and worker.peerIndex == peerIndex:
-                return worker
-        return None
-
-    def tpoolStart(self):  # 處理所有thread的request
-        while True:
-
-            msg_json = self.tpoolMsgQueue.get()
-            logger.debug(f'tpool recv {msg_json}')
-            msg = json.loads(msg_json)
-            workerId = int(msg["from"])
-            if workerId == -1:  # 來自主程式的request
-                self.mainRequest(msg["data"])
-            elif workerId == 0:  # from server thread
-                self.serverSocketRequest(msg["data"])
-            else:  # from p2p thread
-                self.p2pSocketRequest(msg["data"])
-    def mainRequest(self, data):
-        command = data['command']
-        if command == 'send':
-            peerIndex = int(data["peerIndex"])
-
-            message = data["message"]
-            if peerIndex == -1:  # broadcast
-                for worker in self.workers:
-                    if worker.status == 1 and worker.socketType != 'server':
-                        worker.sendMsg(message)
-            else:
-                worker = self.findThreadwithPeerIndex(peerIndex)
-                if worker:
-                    worker.sendMsg(message)
-    def serverSocketRequest(self, msg):
-        command = msg["command"]
-        
-        if command == "create":
-            worker = self.find_free_worker()
-            if not worker:
-                print('no free worker')
-                return 
-            if msg["type"] == "listen":
-                peerIndex = int(msg["peerIndex"])
-                index = int(msg["index"])
-                try:
-                    self.threadPool.submit(worker.listen, peerIndex, index)
-                    logger.debug('create thread')
-                except Exception as e:
-                    logger.error(f"Error: {e}")
-                    return
-                
-            elif msg["type"] == "connect":
-                host = msg["host"]
-                port = int(msg["port"])
-                peerIndex = int(msg["peerIndex"])
-                index = int(msg["index"])
-                try:
-                    self.threadPool.submit(worker.connect, host, port, peerIndex, index)
-                    logger.debug('create thread')
-                except Exception as e:
-                    logger.error(f"Error: {e}")
-                    return
-        
-        elif command == "p2p success":
-            with self.cond:
-                self.cond.notify_all()
-        else:
-            print('msg error')
-
-    def p2pSocketRequest(self, msg):
-        command = msg["command"]
-        if command == "create_ok":
-            if msg["type"] == "listen":  # worker成功建立listen socket，跟worker[0]回報
-                host = msg["host"]
-                port = msg["port"]
-                peerIndex = msg["peerIndex"]
-                index = msg["index"]
-                
-                # Convert to JSON format when sending to worker[0]
-                worker_msg = {
-                    "host": host,
-                    "port": port,
-                    "peerIndex": peerIndex,
-                    "index": index
-                }
-                self.workers[0].msgQueue.put(json.dumps(worker_msg))
-            elif msg["type"] == "connect":
-                pass
-                # self.workers[0].tpoolMsgQueue.put(json.dumps({"status": "create successfully"}))
-        elif command == "connect success":
-            worker_msg = {
-                "msg": "connect success",
-                "peerIndex": msg["peerIndex"], 
-            }
-            self.workers[0].msgQueue.put(json.dumps(worker_msg))
-        elif command == "recv":
-            message = msg["message"]
-            self.mainQueue.put(json.loads(message))
-        elif command == "exit":
-            print('exit')
-        else:
-            print(msg)
-            print('msg error')
-
+            msg = self.Worker2PoolQueue.get()
+            if workerID == -1 or int(msg['from']) == workerID:
+                break
+            temp.append(msg)
+        for tempMsg in temp:
+            self.Worker2PoolQueue.put(tempMsg)
+        return msg['data'], int(msg['from'])
 from signature import DigitalSignature
 
 class p2pInterface():
     def __init__(self, isSignature = False):
         self.alreadyExchangePubKey = False
         self.isSignature = isSignature
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
         socketPool = SocketPool(maxThreads=10)
-        self.inputQueue, self.outputQueue = socketPool.p2pStart()
-        self.index = socketPool.workers[1].index
+        self.Tpool2MainQueue, self.Main2TpoolQueue = socketPool.p2pStart()
+        self.index = socketPool.index
         #數位簽章
         if self.isSignature:
             self.signatureInit()
@@ -424,7 +316,7 @@ class p2pInterface():
                     "message": self.wrapWithSignature(message)
                 }
             }
-            self.inputQueue.put(json.dumps(msg))
+            self.Main2TpoolQueue.put(msg)
         else:
             msg = {
                 "from": -1,
@@ -434,13 +326,13 @@ class p2pInterface():
                     "message": message
                 }
             }
-            self.inputQueue.put(json.dumps(msg))
+            self.Main2TpoolQueue.put(msg)
 
     def recvMsg(self, type=''):#若type不為空，則只接收type的訊息
         if type != '':
             temp = []
             while True:
-                data = self.outputQueue.get()
+                data = self.Tpool2MainQueue.get()
                 '''
                 有簽章的訊息
                 data = {
@@ -458,9 +350,9 @@ class p2pInterface():
                 else:
                     temp.append(data)
             for temp_data in temp:
-                self.outputQueue.put(temp_data)
+                self.Tpool2MainQueue.put(temp_data)
         else:
-            data = self.outputQueue.get()
+            data = self.Tpool2MainQueue.get()
         
         if self.isSignature and self.alreadyExchangePubKey:
             sig:str = data['signature']
@@ -499,6 +391,8 @@ class p2pInterface():
             'message': message,
             'signature': self.digitalSignature.signature(json.dumps(message, sort_keys=True))
         }
+
+
 
 if __name__=='__main__':
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')

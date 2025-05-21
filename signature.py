@@ -44,7 +44,6 @@ class DigitalSignature:
 
             # 編碼訊息
             msg_bytes = msg.encode('utf-8')
-
             # 驗證
             public_key.verify(
                 sig,

@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 N=4
-def send_and_recieve_json(socket,msg):
+def send_and_receive_json(socket,msg):
     send_json(socket,msg)
     return wait_json(socket)
 def send_json(socket,msg):
@@ -26,6 +26,7 @@ def wait_json(socket):
     return data
 class SocketServer:
     def __init__(self, host='0.0.0.0', port=9999, max_threads=10):
+
         self.host = host
         self.port = port
         self.max_threads = max_threads
@@ -41,7 +42,9 @@ class SocketServer:
         self.waitclientnum=0
         self.index=0
         self.waitclients={}
+
     def handle_client(self, client_socket, client_address):
+
         """處理單個客戶端連接"""
             #這裡完全沒鳥race condition
         try:
@@ -83,25 +86,25 @@ class SocketServer:
                 "connect socket number":client['connectNumber']
             }
             # 等待client開啟socket
-            data = send_and_recieve_json(client_socket,msg)
+            data = send_and_receive_json(client_socket,msg)
             if(data['status']!=200):
                 logger.error(f"Error in client {client_address}: {data['msg']}")
                 return
             #把自己收到的connect socket list交給其他thread，如果其他thread收到的connectSockets數量已經足夠，則叫醒其他thread
             with self.globalLock:
                 for socket_info in data['listenSockets']:
-                    print(f'a {client['index']}')
+                    print(f"a {client['index']}")
                     index = int(socket_info['index'])
                     otherclient=self.waitclients[index]
-                    print(f'b {client['index']}')
+                    print(f"b {client['index']}")
                     otherclient['connectSockets'].append(socket_info)
-                    print(f'c {client['index']}')
+                    print(f"c {client['index']}")
                     if len(otherclient['connectSockets'])>=otherclient['connectNumber']:
-                        print(f'd {client['index']}')
+                        print(f"d {client['index']}")
                         with otherclient['cond_socket_ready']:
                             otherclient['cond_socket_ready'].notify_all()
-                    print(f'e {client['index']}')
-            print(f'hi{client['index']}')
+                    print(f"e {client['index']}")
+            print(f"hi{client['index']}")
             if len(client['connectSockets'])<client['connectNumber']:#當client還沒收到所有其他人的socket
                 client['status']=2
                 with client['cond_socket_ready']:
@@ -111,15 +114,16 @@ class SocketServer:
             msg['status']=200
             msg['msg']='success'
             msg['connectSockets']=client['connectSockets']
-            send_json(client['socket'],msg)
-            self.waitclientnum-=1
-            self.index-=1
+            msg = send_and_receive_json(client['socket'],msg)
+
+
         except Exception as e:
             logger.error(f"Error handling client {client_address}: {e}")
         finally:
             client_socket.close()
             logger.info(f"Connection closed for {client_address}")
-
+        self.waitclientnum-=1
+        self.index-=1
 
     def run(self):
         """主服務器循環，接受連接並提交到線程池"""
@@ -134,5 +138,5 @@ class SocketServer:
             self.thread_pool.shutdown(wait=True)
 
 if __name__ == "__main__":
-    server = SocketServer(host='0.0.0.0', port=9999, max_threads=5)
+    server = SocketServer(host='0.0.0.0', port=9999, max_threads=10)
     server.run()
