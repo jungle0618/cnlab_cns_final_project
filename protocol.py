@@ -1,8 +1,7 @@
 from ecdsa.ellipticcurve import Point
 from ecdsa.curves import SECP256k1
 import secrets
-import json
-import client
+from network.client import p2pInterface
 import copy
 curve = SECP256k1.curve
 G = SECP256k1.generator
@@ -65,7 +64,7 @@ class Protocol:
             cards[i] = self.decrypt(cards[i], self.allK[self.Pos][i])
         return cards
     
-    def declarePoints(self, p2pInterface: client.p2pInterface):
+    def declarePoints(self, p2pInterface: p2pInterface):
         points = []
         Pos = self.Pos
         for i in range(self.nCards):
@@ -81,7 +80,7 @@ class Protocol:
         }
         p2pInterface.sendMsg(msg, -1)
         for i in range(self.nPlayer-1):
-            msg = p2pInterface.recvMsg()
+            msg = p2pInterface.recvMsg(type= 'declare point')
             Pos = int(msg["Pos"])
             points = msg["points"]
             self.allP[Pos] = [None]*self.nCards
@@ -102,7 +101,7 @@ class Protocol:
             'y': point.y()
         }
     
-    def shuffle(self, p2pInterface: client.p2pInterface):
+    def shuffle(self, p2pInterface: p2pInterface):
         #先建立52個初始點
         self.declarePoints(p2pInterface)
         #用大K加密再洗牌後交給下個人
@@ -141,7 +140,7 @@ class Protocol:
             msg = p2pInterface.recvMsg()
             self.finalP = [self.toPoint(card) for card in msg["cards"]]
           
-    def dealCards(self, p2pInterface: client.p2pInterface):#將牌發給每個人
+    def dealCards(self, p2pInterface: p2pInterface):#將牌發給每個人
         for Pos in range(self.nPlayer):
             if Pos == self.Pos:#自己拿牌
                 IDs = [x for x in range(self.nCards) if x%self.nPlayer == self.Pos]
@@ -149,7 +148,7 @@ class Protocol:
             else:#別人拿牌
                 self.otherGetCards(p2pInterface)
         return self.cards
-    def getCards(self, p2pInterface: client.p2pInterface, IDs: list[int]):
+    def getCards(self, p2pInterface: p2pInterface, IDs: list[int]):
         # 1. 广播“我要这几张牌”的请求
         req = {'type': 'request_keys', 'Pos': self.Pos, 'IDs': IDs}
         # 先把自己的 key 也放入 allK，以免收消息时漏掉自己
@@ -186,7 +185,7 @@ class Protocol:
             else:
                 print(f"Card {card_id} 解密后不在 initP")
 
-    def otherGetCards(self, p2pInterface: client.p2pInterface):
+    def otherGetCards(self, p2pInterface: p2pInterface):
         # 一直循环监听请求，直到收到所有玩家的 request_keys
         received_reqs = 0
         while received_reqs < self.nPlayer - 1:
@@ -210,9 +209,8 @@ class Protocol:
             p2pInterface.sendMsg(resp, -1)
             received_reqs += 1
 
-    def playCards(self, p2pInterface: client.p2pInterface, card_val:int):#打出一張牌和關於他的key，給其他人驗證
+    def playCards(self, p2pInterface: p2pInterface, card_val:int):#打出一張牌和關於他的key，給其他人驗證
         card_id = self.id_to_val.index(card_val)
-        print(card_id, card_val)
         msg = {
             'type': 'play card',
             'Pos': self.Pos,
@@ -225,14 +223,13 @@ class Protocol:
         received_reqs = 0
         while received_reqs < self.nPlayer-1:
             msg = p2pInterface.recvMsg(type='check card')
-            print(msg)
             if msg["msg"] == 'ok':
                 received_reqs += 1
             else:
                 print('play card_id error')
                 received_reqs +=1
         return 1
-    def otherplayCards(self, p2pInterface: client.p2pInterface):#回傳值和sender
+    def otherplayCards(self, p2pInterface: p2pInterface):#回傳值和sender
         msg = p2pInterface.recvMsg(type='play card')
         card_id = int(msg["card_id"])
         card_val = int(msg["card_val"])

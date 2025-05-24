@@ -1,5 +1,5 @@
 import random
-import client
+from network import client
 from protocol import Protocol
 SuitName = ['C', 'D', 'H', 'S']
 SuitNum = {
@@ -68,6 +68,10 @@ import os
 import platform
 
 class Bridge(client.p2pInterface):
+    encryption: bool#啟用的話洗牌和出牌會進行加密
+    schuffleCheat: bool#啟用的話玩家可以在洗牌嘗試作弊
+    playCheat: bool#啟用的化玩家可以在出牌嘗試作弊
+
     boradId: int#牌號
     dealer: int#開叫人
     vul: int#身價 0:none, 1:ns, 2:ew, 3:both
@@ -86,11 +90,15 @@ class Bridge(client.p2pInterface):
     playPos: int#換哪個玩家行動
     oneRoundCards: list[int]#每輪打出的牌
     trick: int
-    def __init__(self, p2pInterface: client.p2pInterface, encryption = 0):
+    dummyIsLaid: bool
+    dummyCards: list[int]
+    def __init__(self, p2pInterface: client.p2pInterface, encryption = False, schuffleCheat = False, playCheat = False):
         #建立p2p連線
-        self.p2pInterface: client.p2pInterface = p2pInterface
+        self.p2pInterface = p2pInterface
         self.decidePosition()
         self.encryption = encryption
+        self.schuffleCheat = schuffleCheat
+        self.playCheat = playCheat
         if encryption:
             self.procotocol = Protocol(Pos=self.Pos, nPlayer=4, nCards=52)
 
@@ -162,31 +170,31 @@ class Bridge(client.p2pInterface):
             print(str)
     
     def displayDeal(self, deal:dict):
-        print(f'{deal["dealName"]}')
-        print(f'roundNum: {deal["roundNum"]}')
-        print(f'declarerTrick: {deal["declarerTrick"]}')
-        print(f'defenderTrick: {deal["defenderTrick"]}')
+        print(f'{deal["dealName"]}, roundNum: {deal["roundNum"]}, declarerTrick: {deal["declarerTrick"]}, defenderTrick: {deal["defenderTrick"]}')
         oneRoundCards:list[int] = deal["oneRoundCards"]
         str = ''
         for card in oneRoundCards:
             str+=self.toCardName(card)+' '
         print(str)
 
-    def display(self, isDisplayCards=0, isDisplayBid=0, isDisplayDeal=0, cards:list[int]=[], bidList:list[int]=[], deal:dict={}):
+    def display(self, isDisplayCards=0, isDisplayBid=0, isDisplayDeal=0, isDisplayDummyCards=0, cards:list[int]=[], bidList:list[int]=[], deal:dict={}, dummyCards:list[int]=[]):
         def clear_terminal():
-            
-            # 判斷作業系統
             if platform.system() == "Windows":
-                os.system('cls')  # Windows 系統清除
+                os.system('cls')
             else:
-                os.system('clear')  # Linux / macOS 清除
+                os.system('clear')
         clear_terminal()
+        if isDisplayDummyCards and self.Pos != self.dummyPos:
+            print('dummy cards')
+            self.displayCards(dummyCards)
         if isDisplayCards:
+            print('your cards')
             self.displayCards(cards)
         if isDisplayBid:
             self.displayBid(bidList)
         if isDisplayDeal:
             self.displayDeal(deal)
+        
 
     def decidePosition(self):#決定自己坐下的位置
         index = self.p2pInterface.getIndex()
@@ -197,7 +205,6 @@ class Bridge(client.p2pInterface):
     def shuffle(self):
         '''
         有安全洗牌的步驟
-        ...
         '''
         if self.encryption:
             self.procotocol.shuffle(self.p2pInterface)
@@ -210,7 +217,23 @@ class Bridge(client.p2pInterface):
         '''
         if self.Pos == self.dealer:
             cards = [i for i in range(52)]
-            random.shuffle(cards)
+            if self.schuffleCheat:
+                cmd = int(input('決定你的洗牌方式\n' \
+                '1: 正常洗牌\n' \
+                '2: 自己拿超好牌\n' \
+                '3: 發奇怪的牌'))
+                if cmd == 1:
+                    random.shuffle(cards)
+                elif cmd == 2:
+                    t = 0
+                    for j in range (12,-1,-1):
+                        for i in range(4):
+                            cards[t]=13*i+j
+                            t += 1
+                else:
+                    pass
+            else:
+                random.shuffle(cards)
             msg1 = {
                 'type': 'shuffle',
                 'cards':cards[13:26]
@@ -314,22 +337,27 @@ class Bridge(client.p2pInterface):
                 bid = input('叫品不合法，請重新叫牌')
                 bid = self.toBidNum(bid)
             bidList.append(bid)
-        print(self.Pos, self.dealer)
+            return bid
+
+        bidList = []
+        self.display(isDisplayBid=1, bidList=bidList, isDisplayCards=1, cards=self.cards)
         if self.Pos == self.dealer:
-            bidList = []
-            bidOne(bidList)
+            bid = bidOne(bidList)
+            
             msg = {
                 'type': 'bid',
-                'bidList': bidList,
+                'bid': bid,
                 'from': self.Pos,
                 'next': self.nextPos,
             }
             self.p2pInterface.sendMsg(msg)
-
+        
         while True:
+            self.display(isDisplayBid=1, bidList=bidList, isDisplayCards=1, cards=self.cards)
+
             msg = self.p2pInterface.recvMsg()
-            bidList = msg["bidList"]
-            bidList = [int(bid) for bid in bidList]
+            bidList.append(int(msg["bid"]))
+
             self.display(isDisplayBid=1, bidList=bidList, isDisplayCards=1, cards=self.cards)
             if int(msg["next"]) == -1:#叫牌結束
                 self.level      = int(msg["deal"]["level"])
@@ -339,13 +367,13 @@ class Bridge(client.p2pInterface):
                 self.dealName   = msg["deal"]["dealName"]
                 break
             if int(msg["next"]) == self.Pos:##輪到自己叫牌
-                bidOne(bidList)
+                bid = bidOne(bidList)
                 if isBidFinish(bidList):
                     self.level, self.trump, self.declarerPos, self.double = findDeal(bidList, self.dealer)
                     self.dealName = getDealName(self.level, self.trump, self.declarerPos, self.double)
                     msg = {
                         'type': 'bidOver',
-                        'bidList': bidList,
+                        'bid': bid,
                         'from': self.Pos,
                         'next': -1,
                         'deal': {
@@ -362,7 +390,7 @@ class Bridge(client.p2pInterface):
                 else:
                     msg = {
                         'type': 'bid',
-                        'bidList': bidList,
+                        'bid': bid,
                         'from': self.Pos,
                         'next': self.nextPos,
                     }
@@ -439,17 +467,19 @@ class Bridge(client.p2pInterface):
                 self.p2pInterface.sendMsg(msg, peerIndex = -1)
             else:
                 msg = self.p2pInterface.recvMsg(type='laid')
-                dummyCards = msg["dummyCards"]
-                dummyCards = [int(card) for card in dummyCards]
-                print(dummyCards)
+                self.dummyCards = msg["dummyCards"]
+                self.dummyCards = [int(card) for card in self.dummyCards]
+                self.dummyIsLaid = True
                 return
         
         def playOneRound():
             self.playPos = self.leadPos
             self.oneRoundCards = []
             for _ in range(4):
+                if _ == 1 and self.roundNum==0:#夢家攤牌
+                    dummyLaid()
                 #顯示畫面
-                self.display(isDisplayCards=1, cards=self.cards, isDisplayDeal=1, 
+                self.display(isDisplayCards=1, cards=self.cards, isDisplayDummyCards=self.dummyIsLaid, dummyCards=self.dummyCards, isDisplayDeal=1, 
                 deal={
                     'roundNum': self.roundNum,
                     'declarerTrick': self.declarerTrick,
@@ -457,15 +487,16 @@ class Bridge(client.p2pInterface):
                     'dealName': self.dealName,
                     'oneRoundCards': self.oneRoundCards
                 })
-                if _ == 1 and self.roundNum==0:#夢家攤牌
-                    dummyLaid()
+                
                 #出牌
                 if self.Pos == self.playPos:
                     playOneCard()
                 else:
                     otherPlayOneCard()
+                if self.playPos == self.dummyPos and self.Pos != self.dummyPos:
+                    self.dummyCards.remove(self.oneRoundCards[-1])
                 self.playPos = (self.playPos+1)%4
-            #每圈結算
+            #每圈結算s
             winner = compare4Cards(self.oneRoundCards, self.trump, self.leadPos)
             self.leadPos = winner
             self.trick += (winner+self.Pos)%2 == 0
@@ -540,6 +571,8 @@ class Bridge(client.p2pInterface):
             self.trump = self.trump
             self.vul = self.vul
             self.dummyPos = (self.declarerPos+2)%4
+            self.dummyIsLaid = False
+            self.dummyCards = []
 
         def calculateScore(level, trump, declarerPos, vul, double, declarerTrick):
             #要吃敦數=level+7, level=0,...,6
@@ -661,6 +694,14 @@ class Bridge(client.p2pInterface):
             self.play()
 
 if __name__=='__main__':
+    '''
+    isSignature:是否使用簽章
+    encryption:是否使用mental poker洗牌方式
+    schuffleCheat:啟用的話玩家可以在洗牌嘗試作弊
+    playCheat:啟用的化玩家可以在出牌嘗試作弊
+    '''
+    
+    
     p2pInterface = client.p2pInterface(isSignature = True)
-    bridge = Bridge(p2pInterface=p2pInterface, encryption = True)
+    bridge = Bridge(p2pInterface=p2pInterface, encryption = True, schuffleCheat = True, playCheat = True)
     bridge.run()

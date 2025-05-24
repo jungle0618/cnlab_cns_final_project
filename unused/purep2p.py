@@ -1,5 +1,6 @@
 '''
-client.py感覺有點像屎山代碼
+純p2p，沒有中繼server
+但問題是不同nat底下就不能用,所以把他楊了
 thread之間或socket之間都是用json格式做溝通
 
 worker:send和recv socket的訊息，處理socketpool的request, 把收到的訊息交給socketpool, 每個worker各開一個thread給他
@@ -12,6 +13,7 @@ bridge --- p2pInterface --- socketPool --- worker
                                        --- worker
                                        --- worker
 '''
+'''
 import socket
 import threading
 import queue
@@ -19,9 +21,12 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 logger = logging.getLogger(__name__)
-serverHost = '140.112.30.186'
+from signature import DigitalSignature
+#serverHost = '140.112.30.186'
+serverHost = '0.0.0.0'
 serverPort = 9999
-
+'''
+'''
 class Worker:
     # 每個worker只能處理一個socket
     STATUS_IDLE = 0
@@ -91,10 +96,7 @@ class Worker:
     def tryConnection(self):
         try:
             if self.socketType == 'connect':
-                print('try connect')
-                print(self.peerHost, self.peerPort)
                 self.socket.connect((self.peerHost, self.peerPort))
-                print('connect ok')
                 sock = self.socket
                 
             else:
@@ -104,7 +106,7 @@ class Worker:
             self.isConnect = True
             self.Worker2PoolQueue.put({'from': self.workerId, 'data': {'command': 'connect_success', 'peerIndex': self.peerIndex}})
         except Exception as e:
-            print('connect error')
+            logger.error('connect error')
             logger.error(f'Connection error: {e}')
             self.cleanup()
             self.status = Worker.STATUS_IDLE
@@ -148,9 +150,8 @@ class Worker:
         if self.isConnect:
             logger.debug(f'connection success {self.peerIndex}')
             self.runLoop()
-    
-
-
+'''
+'''
 class SocketPool:
     def __init__(self, maxThreads=10):
         self.maxThreads = maxThreads
@@ -208,10 +209,12 @@ class SocketPool:
 
     def p2pConstruct(self):
         def checkConnectSuccess(workerId):
+
             msg, _ =self.getRequest(workerID=workerId)
             if msg["command"] == 'connect_success':
                 return 1
-            print('connect error')
+            
+            logger.error('connect error')
             return 0
         #連線上server
         self.workers[0].createSocket(socketType='connect')
@@ -220,19 +223,10 @@ class SocketPool:
         if not checkConnectSuccess(0):
             return
         #step1 收到server的要求
-        request, _ = self.getRequest(workerID=0) 
+        request, _ = self.getRequest(workerID=0)
         if request["status"] != 200:
             return
-        '''
-            request={
-                "status": 200,
-                "msg": "table is full",
-                "N": 4,
-                "index": 2,
-                "listen socket number": 2,
-                "connect socket number": 1
-            }
-        '''
+
         self.index = request["index"]
         listenSocketNum = int(request["listen socket number"])
         connectSocketNum = int(request["connect socket number"])
@@ -260,16 +254,7 @@ class SocketPool:
 
         #收到server要求連線的清單
         request, _ = self.getRequest(workerID=0)
-        '''request={
-            'status':200,
-            'msg':'ok'
-            'connectSockets':[{
-                'host':...,
-                'port':...,
-                'peerIndex':...,
-                'index':...},
-            ...]
-        }'''
+
         for connectSocket in request["connectSockets"]:
             freeWorker = self.find_free_worker()
             freeWorker.createSocket(socketType='connect')
@@ -297,13 +282,14 @@ class SocketPool:
         for tempMsg in temp:
             self.Worker2PoolQueue.put(tempMsg)
         return msg["data"], int(msg["from"])
-from signature import DigitalSignature
-
+'''
+'''
 class p2pInterface():
-    def __init__(self, isSignature = False):
+    def __init__(self, peerNum=4, isSignature = False):
+        self.peerNum = peerNum
         self.alreadyExchangePubKey = False
         self.isSignature = isSignature
-        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
         socketPool = SocketPool(maxThreads=10)
         self.Tpool2MainQueue, self.Main2TpoolQueue = socketPool.p2pStart()
         self.index = socketPool.index
@@ -315,7 +301,7 @@ class p2pInterface():
     def sendMsg(self, message, peerIndex = -1):
         # Input data is already in JSON format (dict)
         if 'type' not in message:
-            print('Error: message must contain type')
+            logger.error('Error: message must contain type')
             return
         if self.isSignature and self.alreadyExchangePubKey:#有簽章的話message需要再包一層
             msg = {
@@ -337,43 +323,39 @@ class p2pInterface():
                 }
             }
             self.Main2TpoolQueue.put(msg)
+            
+    def recvMsg(self, type='') -> dict:#若type不為空，則只接收type的訊息
+        while True:
+            if type != '':
+                temp = []
+                while True:
+                    data = self.Tpool2MainQueue.get()
 
-    def recvMsg(self, type=''):#若type不為空，則只接收type的訊息
-        if type != '':
-            temp = []
-            while True:
+                    if self.isSignature and self.alreadyExchangePubKey:
+                        message = data["message"]
+                    else:
+                        message = data
+                    if message["type"] == type:
+                        break
+                    else:
+                        temp.append(data)
+                for temp_data in temp:
+                    self.Tpool2MainQueue.put(temp_data)
+            else:
                 data = self.Tpool2MainQueue.get()
-                '''
-                有簽章的訊息
-                data = {
-                'index':
-                'message':'message'<-要回傳的
-                'signature'
-                }
-                '''
-                if self.isSignature and self.alreadyExchangePubKey:
-                    message = data["message"]
-                else:
-                    message = data
-                if message["type"] == type:
-                    break
-                else:
-                    temp.append(data)
-            for temp_data in temp:
-                self.Tpool2MainQueue.put(temp_data)
-        else:
-            data = self.Tpool2MainQueue.get()
-        
-        if self.isSignature and self.alreadyExchangePubKey:
-            sig:str = data["signature"]
-            message_json = json.dumps(data["message"], sort_keys=True)
-            b64PubKey = self.PubKeyList[int(data["index"])]
-            ok = self.digitalSignature.verify(sig, b64PubKey, message_json)
-            if not ok:
-                input('error signature')
-            return data["message"]
-        else:
-            return data
+            
+            if self.isSignature and self.alreadyExchangePubKey:
+                sig:str = data["signature"]
+                message_json = json.dumps(data["message"], sort_keys=True, separators=(',', ':'))
+
+                b64PubKey = self.PubKeyList[int(data["index"])]
+                ok = self.digitalSignature.verify(sig, b64PubKey, message_json)
+                if not ok:
+                    logger.error('error signature')
+                    return -1
+                return data["message"]
+            else:
+                return data
     
     def getIndex(self):
         return self.index
@@ -381,32 +363,81 @@ class p2pInterface():
     def signatureInit(self):
         self.alreadyExchangePubKey = 0
         self.digitalSignature = DigitalSignature()
-        self.PubKeyList = [""]*4
+        self.PubKeyList = [""]*self.peerNum
         self.PubKey = self.digitalSignature.getPubKey()
+        self.PubKeyList[self.index] = self.PubKey
+        myUserId= self.digitalSignature.getUserId()
         msg = {
             'type': 'signature public key',
             'index': self.index,
-            'public key': self.PubKey
+            'user id': myUserId, 
+            'public key': self.PubKey,
+            'signature': self.digitalSignature.signature(f'userId: {myUserId}, index: {self.index}, public key: {self.PubKey}')
         }
         self.sendMsg(msg, peerIndex=-1)
-        for _ in range(4-1):
+        for _ in range(self.peerNum-1):
             msg = self.recvMsg(type='signature public key')
             index = int(msg["index"])
-            self.PubKeyList[index] = msg["public key"]
-        self.alreadyExchangePubKey = 1
+            userId = msg["user id"]
+            sig = msg["signature"]
+            otherpublicKey = msg["public key"]
+            ok = self.digitalSignature.verify(sig, otherpublicKey, f'userId: {userId}, index: {index}, public key: {otherpublicKey}')
+            if not ok:
+                input('error signature')
+                continue
+            self.PubKeyList[index] = otherpublicKey
+        self.alreadyExchangePubKey = 1 #這步驟以後發送和驗證都會使用簽章
+        #檢查所有人收到的publiclist是否一樣
+        self.sendMsg({
+            'type': 'check signature public key',
+            'public list': self.PubKeyList,
+            'from': self.index
+        }, peerIndex=-1)
+        temp = [False]*self.peerNum
+        temp[self.index] = True
+        while not all(temp):
+            msg = self.recvMsg(type='check signature public key')
+            print(type(msg), msg)
+            otherPubKeyList = msg["public list"]
+            index = int(msg["from"])
+            if self.PubKeyList != otherPubKeyList:
+                logger.error(f'error signature')
+                self.sendMsg({
+                    'type': 'signature result',
+                    'result': 'error'
+                }, peerIndex=-1)
+                return -1
+            temp[index] = True
+        #發送確認結果
+        self.sendMsg({
+            'type': 'signature result',
+            'result': 'good',
+            'from': self.index
+        }, peerIndex=-1)
+        temp = [False]*self.peerNum
+        temp[self.index] = True
+        while not all(temp):
+            msg = self.recvMsg(type='signature result')
+            result = msg["result"]
+            index = int(msg['from'])
+            if result != "good" or not(0<= index and index<self.peerNum):
+                return -1
+            temp[index] = True
 
     def wrapWithSignature(self, message: dict) -> dict:
+        # 確保 message 是 deterministic（排序一致）
+        message_str = json.dumps(message, sort_keys=True, separators=(',', ':'))  
+        signature = self.digitalSignature.signature(message_str)
         return {
             'index': self.index,
             'message': message,
-            'signature': self.digitalSignature.signature(json.dumps(message, sort_keys=True))
+            'signature': signature
         }
 
 
 
-if __name__=='__main__':
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(message)s')
-    socketPool = SocketPool(maxThreads=10)
-    socketPool.p2pStart()
-    while True:
-        pass
+'''
+
+
+    
+

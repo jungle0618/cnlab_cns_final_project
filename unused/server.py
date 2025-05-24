@@ -1,5 +1,6 @@
 '''
-負責連線
+只負責幫助peer連線，不儲存資料
+'''
 '''
 import socket
 import threading
@@ -44,7 +45,6 @@ class SocketServer:
         self.waitclients={}
 
     def handle_client(self, client_socket, client_address):
-
         """處理單個客戶端連接"""
             #這裡完全沒鳥race condition
         try:
@@ -126,7 +126,6 @@ class SocketServer:
         self.index-=1
 
     def run(self):
-        """主服務器循環，接受連接並提交到線程池"""
         try:
             while True:
                 client_socket, client_address = self.server_socket.accept()
@@ -136,7 +135,9 @@ class SocketServer:
         finally:
             self.server_socket.close()
             self.thread_pool.shutdown(wait=True)
-
+    
 if __name__ == "__main__":
     server = SocketServer(host='0.0.0.0', port=9999, max_threads=10)
     server.run()
+
+'''

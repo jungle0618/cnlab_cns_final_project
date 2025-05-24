@@ -3,6 +3,8 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 import base64
+import hashlib
+
 class DigitalSignature:
     def __init__(self):
         self.private_key = rsa.generate_private_key(
@@ -17,10 +19,12 @@ class DigitalSignature:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
         self.b64PubKey = base64.b64encode(pem_pub).decode('utf-8')
-
+        self.userId = hashlib.sha256(self.b64PubKey.encode()).hexdigest()
     def getPubKey(self) -> str:
         return self.b64PubKey
-    
+    def getUserId(self) -> str:
+        return self.userId
+
     def signature(self, message:str) -> str:
         messageEncode = message.encode('utf-8')
         sig = self.private_key.sign(
@@ -58,6 +62,7 @@ class DigitalSignature:
             print("簽章驗證成功：訊息完整且發送者可信")
             return True
         except InvalidSignature:
+            print(msg)
             print("簽章驗證失敗：可能遭到篡改或冒用")
             return False
         except Exception as e:
